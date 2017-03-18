@@ -95,17 +95,17 @@ def compute_bitmap(image, median_margin):
 
 COLOR_N = 256
 Z_MID = 127
+WEIGHT_Z = np.array([z + 1 if z < Z_MID else COLOR_N - z + 1 for z in range(COLOR_N)])
+# WEIGHT_Z = np.array([Z_MID for z in range(COLOR_N)])
+# WEIGHT_Z = np.array([z + 1 if z < Z_MID else Z_MID for z in range(COLOR_N)])
+WEIGHT_Z = WEIGHT_Z / np.sum(WEIGHT_Z)
+
 def hdr_debevec(exposure_images, exposure_times, l=3.5):
     exposure_images = np.array(exposure_images)
-    sampling_area = cv2.Canny(cv2.cvtColor(exposure_images[exposure_images.shape[0] // 2], cv2.COLOR_BGR2GRAY), 150, 200) < 127
+    sampling_area = compute_good_sampling_area(exposure_images[exposure_images.shape[0] // 2])
     channel_images = [exposure_images[:, :, :, c] for c in range(exposure_images.shape[-1])]
+
     ln_dt = np.log(exposure_times)
-
-    # weight_z = np.array([z if z <= Z_MID else COLOR_N - z for z in range(COLOR_N)])
-    weight_z = np.array([z + 1 if z < Z_MID else Z_MID for z in range(COLOR_N)])
-    # weight_z = np.array([Z_MID for z in range(COLOR_N)])
-
-    weight_z = weight_z / np.sum(weight_z)
 
     g_funcs = []
     for c, images in enumerate(channel_images):
@@ -116,7 +116,7 @@ def hdr_debevec(exposure_images, exposure_times, l=3.5):
         for i in range(Z.shape[0]):
             for z in range(Z.shape[1]):
                 z_ij = Z[i, z]
-                w_z_ij = weight_z[z_ij]
+                w_z_ij = WEIGHT_Z[z_ij]
                 A[k, z_ij] = w_z_ij
                 A[k, COLOR_N + i] = -w_z_ij
                 b[k] = w_z_ij * ln_dt[z]
@@ -126,18 +126,17 @@ def hdr_debevec(exposure_images, exposure_times, l=3.5):
         b[k] = 5.5
         for i in range(k + 1, A.shape[0]):
             z = i - (k + 1)
-            A[i, z] = l * weight_z[z]
-            A[i, z + 1] = -2 * l * weight_z[z + 1]
-            A[i, z + 2] = l * weight_z[z + 2]
+            A[i, z] = l * WEIGHT_Z[z]
+            A[i, z + 1] = -2 * l * WEIGHT_Z[z + 1]
+            A[i, z + 2] = l * WEIGHT_Z[z + 2]
 
         vars, error, _, __ = np.linalg.lstsq(A, b)
         g_funcs.append(vars[:COLOR_N])
 
-    utils.show_crf_curves(np.exp(g_funcs))
-    hdr_image = debevec_reconstruct_hdr(exposure_images, g_funcs, weight_z, ln_dt)
-    return hdr_image
+    utils.show_crf_curves(g_funcs)
+    return reconstruct_hdr(exposure_images, g_funcs, ln_dt)
 
-def debevec_reconstruct_hdr(exposure_images, g_funcs, weight_z, ln_dt):
+def reconstruct_hdr(exposure_images, g_funcs, ln_dt):
     hdr_image = np.empty(exposure_images.shape[1:])
     channel_images = [exposure_images[:, :, :, c] for c in range(exposure_images.shape[-1])]
     for c, (images, g_func) in enumerate(zip(channel_images, g_funcs)):
@@ -148,8 +147,8 @@ def debevec_reconstruct_hdr(exposure_images, g_funcs, weight_z, ln_dt):
             n = 0.0
             d = 0.0
             for j in range(Z.shape[1]):
-                n += weight_z[Z[i, j]] * (g_func[Z[i, j]] - ln_dt[j])
-                d += weight_z[Z[i, j]]
+                n += WEIGHT_Z[Z[i, j]] * (g_func[Z[i, j]] - ln_dt[j])
+                d += WEIGHT_Z[Z[i, j]]
 
             ln_E[i] = n / d
 
@@ -157,30 +156,34 @@ def debevec_reconstruct_hdr(exposure_images, g_funcs, weight_z, ln_dt):
 
     return hdr_image
 
+def compute_good_sampling_area(median_exposure_image):
+    return cv2.Canny(cv2.cvtColor(median_exposure_image, cv2.COLOR_BGR2GRAY), 150, 200) < 127
+
 def reshape_to_z_ij_and_sample(images, sampling_area, samples=100):
     good_sampling_positions = np.where(sampling_area.ravel())[0]
     sampling_positions = good_sampling_positions[np.random.choice(good_sampling_positions.size, samples)]
     images = images.reshape((images.shape[0], -1)).T
     return images[sampling_positions]
 
-def hdr_poly(exposure_images, exposure_times, max_poly_n=5):
+def hdr_poly(exposure_images, exposure_times, max_poly_n=6):
     exposure_images = np.array(exposure_images)
+    sampling_area = compute_good_sampling_area(exposure_images[exposure_images.shape[0] // 2])
     channel_images = [exposure_images[:, :, :, c] for c in range(3)]
     exposure_ratios = compute_exposure_ratios(exposure_times)
 
-    hdr_image = np.empty(exposure_images.shape[1:])
-    polys = []
+    g_funcs = []
     for c, images in enumerate(channel_images):
-        polys.append(find_poly(images, exposure_ratios, max_poly_n))
+        poly = find_poly(images, sampling_area, exposure_ratios, max_poly_n)
+        g_funcs.append(np.log(poly(np.arange(0, COLOR_N)) + np.finfo(np.float32).eps))
 
-    utils.show_crf_curves([poly(np.arange(0,255)) for poly in polys])
-        #hdr_image[:,:, c] = reconstruct_hdr_intensity(images, coefs)
+    utils.show_crf_curves(g_funcs)
+    return reconstruct_hdr(exposure_images, g_funcs, np.log(exposure_times))
 
 
-def find_poly(images, exposure_ratios, max_poly_n):
+def find_poly(images, sampling_area, exposure_ratios, max_poly_n):
     min_error = np.inf
     best_coefs = None
-    images = reshape_to_z_ij_and_sample(images)
+    images = reshape_to_z_ij_and_sample(images, sampling_area)
     ratio_vector = np.tile(exposure_ratios, (images.shape[0], 1)).ravel()
 
     for poly_n in range(2, max_poly_n):
@@ -212,10 +215,10 @@ def hdr(exposure_images, exposure_times, median_margin=2):
     # debe = cv2.createMergeDebevec()
     # return debe.process(exposure_images, exposure_times)
 
-    my_hdr = hdr_debevec(exposure_images, exposure_times)
+    my_hdr = hdr_poly(exposure_images, exposure_times)
     return my_hdr
 
-def tone_map_basic(hdr_image, a=np.array([1, 1, 1])):
+def tone_map_reinhard(hdr_image, a=np.array([1, 1, 1])):
     output = np.empty_like(hdr_image)
     total = np.sum(np.log(hdr_image + np.finfo(np.float32).eps)) / hdr_image.size
     Lw_bar = np.exp(total)

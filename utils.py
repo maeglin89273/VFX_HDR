@@ -50,6 +50,6 @@ def show_crf_curves(g_funcs):
 
     for g_func, c in zip(g_funcs, ['b', 'g', 'r']):
         # plt.plot(np.log(poly(x)), x)
-        plt.plot(x, g_func, c)
+        plt.plot(x, np.exp(g_func), c)
 
     plt.show()
