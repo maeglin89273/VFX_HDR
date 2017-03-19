@@ -18,8 +18,8 @@ def align_images(images, median_margin=2):
             continue
 
         x, y = compute_full_shift(pivot_bitmap_pyramid, eb_pyramid, shifted_image, pyramid_op_num, median_margin)
-        result.append(shift_color_image(images[i], x, y))
         log_alignment_result(x, y)
+        result.append(shift_color_image(images[i], x, y) if not is_big_shift(x, y) else images[i])
     return result
 
 def compute_bitmap_pyramid(image, pyramid_op_num, median_margin):
@@ -80,10 +80,14 @@ def shift_color_image(image, x, y):
         result[:, :, ci] = cv2.warpAffine(image[:, :, ci], M, (w, h), borderMode=cv2.BORDER_DEFAULT)
     return result
 
+BIG_SHIFT_THRESHOLD = 50
+def is_big_shift(x, y):
+    return np.abs(x) > BIG_SHIFT_THRESHOLD or np.abs(y) > BIG_SHIFT_THRESHOLD
+
 def log_alignment_result(x, y):
     print('alignment shift: %d, %d' % (x, y))
-    if np.abs(x) > 50 or np.abs(y) > 50:
-        print('WARNING: This alignment has big shifts. Try to adjust the median margin')
+    if is_big_shift(x, y):
+        print('WARNING: This alignment has big shifts. We skip alignment on this image')
 
 
 def compute_bitmap(image, median_margin):
@@ -93,11 +97,14 @@ def compute_bitmap(image, median_margin):
     return result, exclusive_bitmap
 
 
+
+# Implementation of Debevec HDR
+
 COLOR_N = 256
 Z_MID = 127
-WEIGHT_Z = np.array([z + 1 if z < Z_MID else COLOR_N - z + 1 for z in range(COLOR_N)])
+# WEIGHT_Z = np.array([z + 1 if z < Z_MID else COLOR_N - z + 1 for z in range(COLOR_N)])
+WEIGHT_Z = np.array([z + 1 if z < Z_MID else Z_MID for z in range(COLOR_N)])
 # WEIGHT_Z = np.array([Z_MID for z in range(COLOR_N)])
-# WEIGHT_Z = np.array([z + 1 if z < Z_MID else Z_MID for z in range(COLOR_N)])
 WEIGHT_Z = WEIGHT_Z / np.sum(WEIGHT_Z)
 
 def hdr_debevec(exposure_images, exposure_times, l=3.5):
@@ -109,26 +116,30 @@ def hdr_debevec(exposure_images, exposure_times, l=3.5):
 
     g_funcs = []
     for c, images in enumerate(channel_images):
-        Z = reshape_to_z_ij_and_sample(images, sampling_area)
+        Z = reshape_to_z_and_sample(images, sampling_area)
         A = np.zeros((Z.size + 1 + COLOR_N - 2, COLOR_N + Z.shape[0]))
         b = np.zeros(A.shape[0])
-        k = 0
-        for i in range(Z.shape[0]):
-            for z in range(Z.shape[1]):
-                z_ij = Z[i, z]
-                w_z_ij = WEIGHT_Z[z_ij]
-                A[k, z_ij] = w_z_ij
-                A[k, COLOR_N + i] = -w_z_ij
-                b[k] = w_z_ij * ln_dt[z]
-                k += 1
 
+
+        w_z_ij = WEIGHT_Z[Z].ravel()
+        z_ij = Z.ravel()
+        row_indices = np.arange(z_ij.size)
+
+        A[row_indices, z_ij] = w_z_ij
+        A[row_indices, COLOR_N + np.repeat(np.arange(Z.shape[0]), Z.shape[1])] = -w_z_ij
+        b[:z_ij.size] = w_z_ij * np.tile(ln_dt, Z.shape[0])
+
+        k = z_ij.size
         A[k, 127] = 1
         b[k] = 5.5
-        for i in range(k + 1, A.shape[0]):
-            z = i - (k + 1)
-            A[i, z] = l * WEIGHT_Z[z]
-            A[i, z + 1] = -2 * l * WEIGHT_Z[z + 1]
-            A[i, z + 2] = l * WEIGHT_Z[z + 2]
+
+        row_indices = np.arange(k + 1, A.shape[0])
+        z_0_i = np.arange(0, row_indices.size)
+        z_1_i = 1 + z_0_i
+        z_2_i = 2 + z_0_i
+        A[row_indices, z_0_i] = l * WEIGHT_Z[z_0_i]
+        A[row_indices, z_1_i] = -2 * l * WEIGHT_Z[z_1_i]
+        A[row_indices, z_2_i] = l * WEIGHT_Z[z_2_i]
 
         vars, error, _, __ = np.linalg.lstsq(A, b)
         g_funcs.append(vars[:COLOR_N])
@@ -136,35 +147,17 @@ def hdr_debevec(exposure_images, exposure_times, l=3.5):
     utils.show_crf_curves(g_funcs)
     return reconstruct_hdr(exposure_images, g_funcs, ln_dt)
 
-def reconstruct_hdr(exposure_images, g_funcs, ln_dt):
-    hdr_image = np.empty(exposure_images.shape[1:])
-    channel_images = [exposure_images[:, :, :, c] for c in range(exposure_images.shape[-1])]
-    for c, (images, g_func) in enumerate(zip(channel_images, g_funcs)):
-        Z = images.reshape((images.shape[0], -1)).T
-
-        ln_E = np.empty(Z.shape[0])
-        for i in range(ln_E.size):
-            n = 0.0
-            d = 0.0
-            for j in range(Z.shape[1]):
-                n += WEIGHT_Z[Z[i, j]] * (g_func[Z[i, j]] - ln_dt[j])
-                d += WEIGHT_Z[Z[i, j]]
-
-            ln_E[i] = n / d
-
-        hdr_image[:, :, c] = np.exp(ln_E).reshape(hdr_image.shape[:-1])
-
-    return hdr_image
 
 def compute_good_sampling_area(median_exposure_image):
     return cv2.Canny(cv2.cvtColor(median_exposure_image, cv2.COLOR_BGR2GRAY), 150, 200) < 127
 
-def reshape_to_z_ij_and_sample(images, sampling_area, samples=100):
+def reshape_to_z_and_sample(images, sampling_area, samples=200):
     good_sampling_positions = np.where(sampling_area.ravel())[0]
     sampling_positions = good_sampling_positions[np.random.choice(good_sampling_positions.size, samples)]
     images = images.reshape((images.shape[0], -1)).T
     return images[sampling_positions]
 
+#Implementation of polynomial HDR
 def hdr_poly(exposure_images, exposure_times, max_poly_n=6):
     exposure_images = np.array(exposure_images)
     sampling_area = compute_good_sampling_area(exposure_images[exposure_images.shape[0] // 2])
@@ -183,7 +176,7 @@ def hdr_poly(exposure_images, exposure_times, max_poly_n=6):
 def find_poly(images, sampling_area, exposure_ratios, max_poly_n):
     min_error = np.inf
     best_coefs = None
-    images = reshape_to_z_ij_and_sample(images, sampling_area)
+    images = reshape_to_z_and_sample(images, sampling_area)
     ratio_vector = np.tile(exposure_ratios, (images.shape[0], 1)).ravel()
 
     for poly_n in range(2, max_poly_n):
@@ -208,29 +201,40 @@ def find_poly(images, sampling_area, exposure_ratios, max_poly_n):
 def compute_exposure_ratios(exposure_times):
     return np.array([exposure_times[i] / exposure_times[i + 1] for i in range(len(exposure_times) - 1)])
 
-def hdr(exposure_images, exposure_times, median_margin=2):
+def reconstruct_hdr(exposure_images, g_funcs, ln_dt):
+    hdr_image = np.empty(exposure_images.shape[1:])
+    channel_images = [exposure_images[:, :, :, c] for c in range(exposure_images.shape[-1])]
+    for c, (images, g_func) in enumerate(zip(channel_images, g_funcs)):
+        Z = images.reshape((images.shape[0], -1)).T
+
+        w_z_ij = WEIGHT_Z[Z]
+        ln_E = np.sum((g_func[Z] - np.tile(ln_dt, (Z.shape[0], 1))) * w_z_ij, axis=1) / np.sum(w_z_ij, axis=1)
+
+        hdr_image[:, :, c] = np.exp(ln_E).reshape(hdr_image.shape[:-1])
+
+    return hdr_image
+
+def hdr(exposure_images, exposure_times, algorithm='debevec', median_margin=2):
+    aligned_images = exposure_images
     # aligned_images = align_images(exposure_images, median_margin)
-    # return hdr_poly(exposure_images, exposure_times)
 
-    # debe = cv2.createMergeDebevec()
-    # return debe.process(exposure_images, exposure_times)
+    if algorithm == 'debevec':
+        hdr_image = hdr_debevec(aligned_images, exposure_times)
+    elif algorithm == 'poly':
+        hdr_image = hdr_poly(aligned_images, exposure_times, 5)
+    else:
+        hdr_image = hdr_debevec(aligned_images, exposure_times)
 
-    my_hdr = hdr_poly(exposure_images, exposure_times)
-    return my_hdr
+    return hdr_image
 
-def tone_map_reinhard(hdr_image, a=np.array([1, 1, 1])):
+def tone_map_reinhard(hdr_image, a=np.array([0.3, 0.3, 0.3])):
     output = np.empty_like(hdr_image)
     total = np.sum(np.log(hdr_image + np.finfo(np.float32).eps)) / hdr_image.size
     Lw_bar = np.exp(total)
     coef = a / Lw_bar
-    # print(hdr_image)
+
     for c in range(output.shape[2]):
         output[:, :, c] = coef[c] * hdr_image[:, :, c]
         output[:, :, c] = output[:, :, c] / (1 + output[:, :, c])
 
     return output
-
-def tone_mapping(hdr, gamma, l, c):
-    tonemap = cv2.createTonemapReinhard(gamma=gamma, light_adapt=l, color_adapt=c)
-    ldr = tonemap.process(hdr.copy())
-    return np.clip(ldr * 255, 0, 255).astype('uint8')
