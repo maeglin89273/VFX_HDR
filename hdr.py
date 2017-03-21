@@ -18,7 +18,7 @@ def align_images(images, median_margin=2):
             continue
 
         x, y = compute_full_shift(pivot_bitmap_pyramid, eb_pyramid, shifted_image, pyramid_op_num, median_margin)
-        log_alignment_result(x, y)
+        print_alignment_result(x, y)
         result.append(shift_color_image(images[i], x, y) if not is_big_shift(x, y) else images[i])
     return result
 
@@ -84,7 +84,7 @@ BIG_SHIFT_THRESHOLD = 50
 def is_big_shift(x, y):
     return np.abs(x) > BIG_SHIFT_THRESHOLD or np.abs(y) > BIG_SHIFT_THRESHOLD
 
-def log_alignment_result(x, y):
+def print_alignment_result(x, y):
     print('alignment shift: %d, %d' % (x, y))
     if is_big_shift(x, y):
         print('WARNING: This alignment has big shifts. We skip alignment on this image')
@@ -107,7 +107,7 @@ WEIGHT_Z = np.array([z + 1 if z < Z_MID else Z_MID for z in range(COLOR_N)])
 # WEIGHT_Z = np.array([Z_MID for z in range(COLOR_N)])
 WEIGHT_Z = WEIGHT_Z / np.sum(WEIGHT_Z)
 
-def hdr_debevec(exposure_images, exposure_times, l=3.5):
+def hdr_debevec(exposure_images, exposure_times, l=8):
     exposure_images = np.array(exposure_images)
     sampling_area = compute_good_sampling_area(exposure_images[exposure_images.shape[0] // 2])
     channel_images = [exposure_images[:, :, :, c] for c in range(exposure_images.shape[-1])]
@@ -119,7 +119,6 @@ def hdr_debevec(exposure_images, exposure_times, l=3.5):
         Z = reshape_to_z_and_sample(images, sampling_area)
         A = np.zeros((Z.size + 1 + COLOR_N - 2, COLOR_N + Z.shape[0]))
         b = np.zeros(A.shape[0])
-
 
         w_z_ij = WEIGHT_Z[Z].ravel()
         z_ij = Z.ravel()
@@ -151,14 +150,15 @@ def hdr_debevec(exposure_images, exposure_times, l=3.5):
 def compute_good_sampling_area(median_exposure_image):
     return cv2.Canny(cv2.cvtColor(median_exposure_image, cv2.COLOR_BGR2GRAY), 150, 200) < 127
 
-def reshape_to_z_and_sample(images, sampling_area, samples=200):
+def reshape_to_z_and_sample(images, sampling_area, samples=500):
     good_sampling_positions = np.where(sampling_area.ravel())[0]
     sampling_positions = good_sampling_positions[np.random.choice(good_sampling_positions.size, samples)]
     images = images.reshape((images.shape[0], -1)).T
     return images[sampling_positions]
 
+
 #Implementation of polynomial HDR
-def hdr_poly(exposure_images, exposure_times, max_poly_n=6):
+def hdr_poly(exposure_images, exposure_times, max_poly_n=25):
     exposure_images = np.array(exposure_images)
     sampling_area = compute_good_sampling_area(exposure_images[exposure_images.shape[0] // 2])
     channel_images = [exposure_images[:, :, :, c] for c in range(3)]
@@ -166,36 +166,34 @@ def hdr_poly(exposure_images, exposure_times, max_poly_n=6):
 
     g_funcs = []
     for c, images in enumerate(channel_images):
-        poly = find_poly(images, sampling_area, exposure_ratios, max_poly_n)
-        g_funcs.append(np.log(poly(np.arange(0, COLOR_N)) + np.finfo(np.float32).eps))
+        g_func = find_poly_g_func(images, sampling_area, exposure_ratios, max_poly_n)
+        g_funcs.append(g_func)
 
     utils.show_crf_curves(g_funcs)
     return reconstruct_hdr(exposure_images, g_funcs, np.log(exposure_times))
 
 
-def find_poly(images, sampling_area, exposure_ratios, max_poly_n):
+def find_poly_g_func(images, sampling_area, exposure_ratios, max_poly_n):
     min_error = np.inf
     best_coefs = None
-    images = reshape_to_z_and_sample(images, sampling_area)
-    ratio_vector = np.tile(exposure_ratios, (images.shape[0], 1)).ravel()
+    Z = reshape_to_z_and_sample(images, sampling_area) / (COLOR_N - 1) # Since the numerical problem, shrink 0-255 to 0~1
+    ratio_vector = np.repeat(exposure_ratios, Z.shape[0])
+    N = Z.shape[0]
 
-    for poly_n in range(2, max_poly_n):
-        b = np.zeros(poly_n + 2)
+    for poly_n in range(2, max_poly_n + 1):
+        Z_ji_m = np.tile(Z.T.reshape((-1, 1)), (1, poly_n + 1)) ** np.arange(poly_n, -1, -1)
+        A = Z_ji_m[:-N, :] - (ratio_vector[:, np.newaxis] * Z_ji_m[N:, :])
+        A = np.vstack((A, np.ones(A.shape[1])))
+        b = np.zeros(A.shape[0])
         b[-1] = 1
-        a = np.ones((b.shape[0], poly_n + 1))
-        for term_i in range(0, poly_n + 1):
-            tmp1 = images[:, :-1].ravel() ** term_i - ratio_vector * images[:, 1:].ravel() ** term_i
-            tmp1 = tmp1[:, np.newaxis]
-            tmp2 = np.empty((tmp1.shape[0], poly_n + 1))
-            for term_j in range(poly_n, -1, -1):
-                tmp2[:, term_j] = images[:, :-1].ravel() ** term_j - ratio_vector * images[:, 1:].ravel() ** term_j
-
-            a[term_i, :] = np.sum(tmp1 * tmp2, axis=0)
-        coefs, error, _, __ = np.linalg.lstsq(a, b)
+        coefs, error, _, __ = np.linalg.lstsq(A, b)
         if error < min_error:
             min_error = error
             best_coefs = coefs
-    return np.poly1d(best_coefs)
+
+    poly = np.poly1d(best_coefs)
+    poly_g_func = poly(np.arange(0, COLOR_N) / (COLOR_N - 1))
+    return np.log(np.clip(poly_g_func, 0, 1) + np.finfo(np.float32).eps)
 
 
 def compute_exposure_ratios(exposure_times):
@@ -205,6 +203,7 @@ def reconstruct_hdr(exposure_images, g_funcs, ln_dt):
     hdr_image = np.empty(exposure_images.shape[1:])
     channel_images = [exposure_images[:, :, :, c] for c in range(exposure_images.shape[-1])]
     for c, (images, g_func) in enumerate(zip(channel_images, g_funcs)):
+        g_func = g_funcs[1]
         Z = images.reshape((images.shape[0], -1)).T
 
         w_z_ij = WEIGHT_Z[Z]
@@ -215,13 +214,13 @@ def reconstruct_hdr(exposure_images, g_funcs, ln_dt):
     return hdr_image
 
 def hdr(exposure_images, exposure_times, algorithm='debevec', median_margin=2):
-    aligned_images = exposure_images
-    # aligned_images = align_images(exposure_images, median_margin)
+    # aligned_images = exposure_images
+    aligned_images = align_images(exposure_images, median_margin)
 
     if algorithm == 'debevec':
         hdr_image = hdr_debevec(aligned_images, exposure_times)
     elif algorithm == 'poly':
-        hdr_image = hdr_poly(aligned_images, exposure_times, 5)
+        hdr_image = hdr_poly(aligned_images, exposure_times)
     else:
         hdr_image = hdr_debevec(aligned_images, exposure_times)
 
