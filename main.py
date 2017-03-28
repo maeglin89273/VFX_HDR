@@ -7,7 +7,7 @@ def exposure_time_txts(exposure_times):
 def tone_map_params_enumeration(hdr_image):
     ldr_images = []
     param_txts = []
-    for m in np.linspace(1.5, 0.8, 1):
+    for m in np.linspace(0.45, 0.5, 1):
         for b in np.linspace(0.05, 0.05, 1):
             for g in np.linspace(0.05, 0.05, 1):
                 for r in np.linspace(0.05, 0.15, 1):
@@ -19,7 +19,7 @@ def tone_map_params_enumeration(hdr_image):
 
 if __name__ == '__main__':
     ROOT_DIR = sys.argv[1]
-    images, exposure_times = utils.exposure_series(ROOT_DIR)
+    images, exposure_times = utils.exposure_series(ROOT_DIR, scale=0.4)
     # exposure_times = np.loadtxt(ROOT_DIR + 'exposure_times.txt', delimiter=',')
 
     # merge_mertens = cv2.createMergeMertens()

@@ -1,14 +1,15 @@
 import cv2, matplotlib.pyplot as plt, numpy as np
 import os
 from math import ceil
-def exposure_series(dir):
+def exposure_series(dir, scale=1.0):
     cat_dir = lambda filename: dir + filename
 
     image_filenames = [cat_dir(filename) for filename in os.listdir(dir) if filename[0].isdigit()]
-    image_filenames.sort()
-    images = [cv2.pyrDown(cv2.pyrDown(cv2.pyrDown(cv2.imread(filename)))) for filename in image_filenames]
-    exposure_times = [1 / float(os.path.splitext(os.path.basename(filename))[0]) for filename in image_filenames]
-    return images, exposure_times
+    tuples = [(float(os.path.splitext(os.path.basename(filename))[0]), filename) for filename in image_filenames]
+    tuples.sort(key=lambda t:t[0])
+    images = [cv2.resize(cv2.imread(filename),(0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA) for t, filename in tuples]
+
+    return images, [t for t, fn in tuples]
 
 def bgr_to_rgb(image):
     b, g, r = cv2.split(image)

@@ -107,7 +107,7 @@ WEIGHT_Z = np.array([z + 1 if z < Z_MID else Z_MID for z in range(COLOR_N)])
 # WEIGHT_Z = np.array([Z_MID for z in range(COLOR_N)])
 WEIGHT_Z = WEIGHT_Z / np.sum(WEIGHT_Z)
 
-def hdr_debevec(exposure_images, exposure_times, l=8):
+def hdr_debevec(exposure_images, exposure_times, l=5):
     exposure_images = np.array(exposure_images)
     sampling_area = compute_good_sampling_area(exposure_images[exposure_images.shape[0] // 2])
     channel_images = [exposure_images[:, :, :, c] for c in range(exposure_images.shape[-1])]
@@ -150,7 +150,7 @@ def hdr_debevec(exposure_images, exposure_times, l=8):
 def compute_good_sampling_area(median_exposure_image):
     return cv2.Canny(cv2.cvtColor(median_exposure_image, cv2.COLOR_BGR2GRAY), 150, 200) < 127
 
-def reshape_to_z_and_sample(images, sampling_area, samples=500):
+def reshape_to_z_and_sample(images, sampling_area, samples=1000):
     good_sampling_positions = np.where(sampling_area.ravel())[0]
     sampling_positions = good_sampling_positions[np.random.choice(good_sampling_positions.size, samples)]
     images = images.reshape((images.shape[0], -1)).T
@@ -213,9 +213,11 @@ def reconstruct_hdr(exposure_images, g_funcs, ln_dt):
 
     return hdr_image
 
-def hdr(exposure_images, exposure_times, algorithm='debevec', median_margin=2):
-    # aligned_images = exposure_images
-    aligned_images = align_images(exposure_images, median_margin)
+def hdr(exposure_images, exposure_times, alignment=True, algorithm='debevec', median_margin=2):
+    if alignment:
+        aligned_images = align_images(exposure_images, median_margin)
+    else:
+        aligned_images = exposure_images
 
     if algorithm == 'debevec':
         hdr_image = hdr_debevec(aligned_images, exposure_times)
