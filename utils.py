@@ -6,8 +6,9 @@ def exposure_series(dir):
 
     image_filenames = [cat_dir(filename) for filename in os.listdir(dir) if filename[0].isdigit()]
     image_filenames.sort()
-    images = [cv2.imread(filename) for filename in image_filenames]
-    return images
+    images = [cv2.pyrDown(cv2.pyrDown(cv2.pyrDown(cv2.imread(filename)))) for filename in image_filenames]
+    exposure_times = [1 / float(os.path.splitext(os.path.basename(filename))[0]) for filename in image_filenames]
+    return images, exposure_times
 
 def bgr_to_rgb(image):
     b, g, r = cv2.split(image)
