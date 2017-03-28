@@ -1,8 +1,11 @@
 import cv2, matplotlib.pyplot as plt, numpy as np
 import os
 from math import ceil
+
+
+
 def exposure_series(dir, scale=1.0):
-    cat_dir = lambda filename: dir + filename
+    cat_dir = lambda filename: os.path.join(dir, filename)
 
     image_filenames = [cat_dir(filename) for filename in os.listdir(dir) if filename[0].isdigit()]
     tuples = [(float(os.path.splitext(os.path.basename(filename))[0]), filename) for filename in image_filenames]
@@ -14,6 +17,7 @@ def exposure_series(dir, scale=1.0):
 def bgr_to_rgb(image):
     b, g, r = cv2.split(image)
     return cv2.merge([r, g, b])
+
 
 def show_hdr_image(hdr_image):
     channel = hdr_image.shape[2]
@@ -51,7 +55,6 @@ def show_crf_curves(g_funcs):
     x = np.arange(0, 256)
 
     for g_func, c in zip(g_funcs, ['b', 'g', 'r']):
-        # plt.plot(np.log(poly(x)), x)
         plt.plot(x, np.exp(g_func), c)
 
     plt.show()

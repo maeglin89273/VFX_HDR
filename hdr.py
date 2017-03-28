@@ -20,6 +20,7 @@ def align_images(images, median_margin=2):
         x, y = compute_full_shift(pivot_bitmap_pyramid, eb_pyramid, shifted_image, pyramid_op_num, median_margin)
         print_alignment_result(x, y)
         result.append(shift_color_image(images[i], x, y) if not is_big_shift(x, y) else images[i])
+
     return result
 
 def compute_bitmap_pyramid(image, pyramid_op_num, median_margin):
@@ -54,7 +55,7 @@ def compute_shift(pivot_bitmap, shifted_bitmap, pivot_eb, shifted_eb):
     x = 0
     y = 0
     min_error = pivot_bitmap.size
-    for ix, iy in [(0, 0), (1, 0), (0, 1), (-1, 0), (0, -1), (1, 1), (-1, 1), (1, -1), (-1, -1)]:
+    for ix, iy in [(0, 0), (1, 0), (0, 1), (-1, 0), (0, -1), (1, 1), (-1, 1), (1, -1), (-1, -1)]: #from inner to outter
         ss_bitmap = shift_bitmap(shifted_bitmap, ix, iy)
         ss_eb = shift_bitmap(shifted_eb, ix, iy)
         error = np.count_nonzero(ss_bitmap ^ pivot_bitmap & pivot_eb & ss_eb)
@@ -128,11 +129,11 @@ def hdr_debevec(exposure_images, exposure_times, l=5):
         A[row_indices, COLOR_N + np.repeat(np.arange(Z.shape[0]), Z.shape[1])] = -w_z_ij
         b[:z_ij.size] = w_z_ij * np.tile(ln_dt, Z.shape[0])
 
-        k = z_ij.size
-        A[k, 127] = 1
-        b[k] = 5.5
+        mid_idx = z_ij.size
+        A[mid_idx, 127] = 1
+        b[mid_idx] = 5.5 #heuristic value
 
-        row_indices = np.arange(k + 1, A.shape[0])
+        row_indices = np.arange(mid_idx + 1, A.shape[0])
         z_0_i = np.arange(0, row_indices.size)
         z_1_i = 1 + z_0_i
         z_2_i = 2 + z_0_i
@@ -226,7 +227,7 @@ def hdr(exposure_images, exposure_times, alignment=True, algorithm='debevec', me
     else:
         hdr_image = hdr_debevec(aligned_images, exposure_times)
 
-    return hdr_image
+    return hdr_image.astype('float32') #hdr file works with float32
 
 def tone_map_reinhard(hdr_image, a=np.array([0.3, 0.3, 0.3])):
     output = np.empty_like(hdr_image)
