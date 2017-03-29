@@ -108,7 +108,7 @@ WEIGHT_Z = np.array([z + 1 if z < Z_MID else Z_MID for z in range(COLOR_N)])
 # WEIGHT_Z = np.array([Z_MID for z in range(COLOR_N)])
 WEIGHT_Z = WEIGHT_Z / np.sum(WEIGHT_Z)
 
-def hdr_debevec(exposure_images, exposure_times, l=5):
+def hdr_debevec(exposure_images, exposure_times, l=8):
     exposure_images = np.array(exposure_images)
     sampling_area = compute_good_sampling_area(exposure_images[exposure_images.shape[0] // 2])
     channel_images = [exposure_images[:, :, :, c] for c in range(exposure_images.shape[-1])]
@@ -159,7 +159,7 @@ def reshape_to_z_and_sample(images, sampling_area, samples=1000):
 
 
 #Implementation of polynomial HDR
-def hdr_poly(exposure_images, exposure_times, max_poly_n=25):
+def hdr_poly(exposure_images, exposure_times, max_power=25):
     exposure_images = np.array(exposure_images)
     sampling_area = compute_good_sampling_area(exposure_images[exposure_images.shape[0] // 2])
     channel_images = [exposure_images[:, :, :, c] for c in range(3)]
@@ -167,21 +167,21 @@ def hdr_poly(exposure_images, exposure_times, max_poly_n=25):
 
     g_funcs = []
     for c, images in enumerate(channel_images):
-        g_func = find_poly_g_func(images, sampling_area, exposure_ratios, max_poly_n)
+        g_func = find_poly_g_func(images, sampling_area, exposure_ratios, max_power)
         g_funcs.append(g_func)
 
     utils.show_crf_curves(g_funcs)
     return reconstruct_hdr(exposure_images, g_funcs, np.log(exposure_times))
 
 
-def find_poly_g_func(images, sampling_area, exposure_ratios, max_poly_n):
+def find_poly_g_func(images, sampling_area, exposure_ratios, max_power):
     min_error = np.inf
     best_coefs = None
     Z = reshape_to_z_and_sample(images, sampling_area) / (COLOR_N - 1) # Since the numerical problem, shrink 0-255 to 0~1
     ratio_vector = np.repeat(exposure_ratios, Z.shape[0])
     N = Z.shape[0]
 
-    for poly_n in range(2, max_poly_n + 1):
+    for poly_n in range(2, max_power + 1):
         Z_ji_m = np.tile(Z.T.reshape((-1, 1)), (1, poly_n + 1)) ** np.arange(poly_n, -1, -1)
         A = Z_ji_m[:-N, :] - (ratio_vector[:, np.newaxis] * Z_ji_m[N:, :])
         A = np.vstack((A, np.ones(A.shape[1])))
@@ -192,6 +192,7 @@ def find_poly_g_func(images, sampling_area, exposure_ratios, max_poly_n):
             min_error = error
             best_coefs = coefs
 
+    print('largest polynomial degree: %s' % (best_coefs.size - 1))
     poly = np.poly1d(best_coefs)
     poly_g_func = poly(np.arange(0, COLOR_N) / (COLOR_N - 1))
     return np.log(np.clip(poly_g_func, 0, 1) + np.finfo(np.float32).eps)
