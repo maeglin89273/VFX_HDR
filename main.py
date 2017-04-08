@@ -14,7 +14,7 @@ if __name__ == '__main__':
     hdr_image = hdr.hdr(images, exposure_times, algorithm=sys.argv[2])
     utils.show_hdr_image(hdr_image)
     #save .hdr file
-    # cv2.imwrite(os.path.join(ROOT_DIR, 'hdr_result.hdr'), hdr_image)
+    cv2.imwrite(os.path.join(ROOT_DIR, 'hdr_result.hdr'), hdr_image)
 
 
 
