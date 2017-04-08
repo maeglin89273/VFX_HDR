@@ -16,14 +16,6 @@ if __name__ == '__main__':
     #save .hdr file
     # cv2.imwrite(os.path.join(ROOT_DIR, 'hdr_result.hdr'), hdr_image)
 
-    a = 0.55
-    ldr_image = hdr.tone_map_reinhard(hdr_image, np.array([a] * 3))
-    utils.show_images([ldr_image], cols=1)
-
-    #save the ldr image
-    # cv2.imwrite(os.path.join(ROOT_DIR,'ldr_result.jpg'), np.clip(ldr_images_2[0] * 255, 0, 255).astype('uint8'))
-
-
 
 
 

@@ -159,7 +159,7 @@ def reshape_to_z_and_sample(images, sampling_area, samples=1000):
 
 
 #Implementation of polynomial HDR
-def hdr_poly(exposure_images, exposure_times, max_power=25):
+def hdr_poly(exposure_images, exposure_times, max_order=25):
     exposure_images = np.array(exposure_images)
     sampling_area = compute_good_sampling_area(exposure_images[exposure_images.shape[0] // 2])
     channel_images = [exposure_images[:, :, :, c] for c in range(3)]
@@ -167,21 +167,21 @@ def hdr_poly(exposure_images, exposure_times, max_power=25):
 
     g_funcs = []
     for c, images in enumerate(channel_images):
-        g_func = find_poly_g_func(images, sampling_area, exposure_ratios, max_power)
+        g_func = find_poly_g_func(images, sampling_area, exposure_ratios, max_order)
         g_funcs.append(g_func)
 
     utils.show_crf_curves(g_funcs)
     return reconstruct_hdr(exposure_images, g_funcs, np.log(exposure_times))
 
 
-def find_poly_g_func(images, sampling_area, exposure_ratios, max_power):
+def find_poly_g_func(images, sampling_area, exposure_ratios, max_order):
     min_error = np.inf
     best_coefs = None
     Z = reshape_to_z_and_sample(images, sampling_area) / (COLOR_N - 1) # Since the numerical problem, shrink 0-255 to 0~1
     ratio_vector = np.repeat(exposure_ratios, Z.shape[0])
     N = Z.shape[0]
 
-    for poly_n in range(2, max_power + 1):
+    for poly_n in range(2, max_order + 1):
         Z_ji_m = np.tile(Z.T.reshape((-1, 1)), (1, poly_n + 1)) ** np.arange(poly_n, -1, -1)
         A = Z_ji_m[:-N, :] - (ratio_vector[:, np.newaxis] * Z_ji_m[N:, :])
         A = np.vstack((A, np.ones(A.shape[1])))
@@ -230,14 +230,3 @@ def hdr(exposure_images, exposure_times, alignment=True, algorithm='debevec', me
 
     return hdr_image.astype('float32') #hdr file works with float32
 
-def tone_map_reinhard(hdr_image, a=np.array([0.3, 0.3, 0.3])):
-    output = np.empty_like(hdr_image)
-    total = np.sum(np.log(hdr_image + np.finfo(np.float32).eps)) / hdr_image.size
-    Lw_bar = np.exp(total)
-    coef = a / Lw_bar
-
-    for c in range(output.shape[2]):
-        output[:, :, c] = coef[c] * hdr_image[:, :, c]
-        output[:, :, c] = output[:, :, c] / (1 + output[:, :, c])
-
-    return output
